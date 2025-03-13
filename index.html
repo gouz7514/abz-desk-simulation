@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <title>ABZ 자리배치 시뮬레이션</title>
+    <!-- LZ-String 라이브러리 (CDN) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
     <style>
       body {
         margin: 0;
@@ -92,13 +94,18 @@
         cursor: move;
       }
 
-      /* 중앙 이름 입력 필드 */
-      .desk-label {
+      /* 중앙 이름 입력 래퍼 (반대로 회전시킬 용도) */
+      .desk-label-wrapper {
         position: absolute;
-        width: 80px;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
+        transform-origin: center center;
+      }
+      /* 실제 input 필드 */
+      .desk-label {
+        /* width: 80px; */
+        max-width: 40px;
         border: 1px solid #aaa;
         font-size: 14px;
         text-align: center;
@@ -178,6 +185,9 @@
       <button id="resetBtn">Reset</button>
     </div>
 
+    <!-- LZ-String 스크립트 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+
     <script>
       /* 
         책상 데이터 배열 
@@ -214,8 +224,7 @@
         startTop = 0;
 
       /**
-       * 전역 이동량(dx, dy)을 angleDeg만큼 "역회전"하여
-       * 로컬(회전 전) 좌표로 변환
+       * (dx, dy)를 angleDeg만큼 "역회전"하여 로컬(회전 전) 좌표로 변환
        */
       function toLocalDelta(dx, dy, angleDeg) {
         const rad = (-angleDeg * Math.PI) / 180;
@@ -262,15 +271,23 @@
         desk.style.width = w + "px";
         desk.style.height = h + "px";
         desk.dataset.rotation = String(rotation);
-        // 초기 회전 적용
+        // 초기 회전
         desk.style.transform = `rotate(${rotation}deg)`;
 
-        // 중앙 Label
+        // 라벨을 감싸는 래퍼 (회전 무효화를 위해)
+        const labelWrapper = document.createElement("div");
+        labelWrapper.className = "desk-label-wrapper";
+        // 여기서는 translate(-50%, -50%)로 이미 중앙 정렬
+        // 나중에 rotate(-rotation) 적용
+
+        // 라벨 input
         const labelInput = document.createElement("input");
         labelInput.className = "desk-label";
         labelInput.placeholder = "이름";
         labelInput.value = labelValue;
-        // label 변경 시 deskList도 갱신
+        labelWrapper.appendChild(labelInput);
+
+        // label 값 변경 시 deskList 갱신
         labelInput.addEventListener("input", () => {
           const find = deskList.find((d) => d.id == desk.dataset.id);
           if (find) {
@@ -278,7 +295,9 @@
             updateURLWithDeskData();
           }
         });
-        desk.appendChild(labelInput);
+
+        // desk에 labelWrapper 추가
+        desk.appendChild(labelWrapper);
 
         // 회전 버튼
         const rotateBtn = document.createElement("div");
@@ -318,8 +337,10 @@
         const handleBR = document.createElement("div");
         handleBR.classList.add("resize-handle", "bottom-right");
 
-        [handleTL, handleTR, handleBL, handleBR].forEach((h) => {
-          h.addEventListener("mousedown", (e) => onResizeMouseDown(e, desk, h));
+        [handleTL, handleTR, handleBL, handleBR].forEach((h2) => {
+          h2.addEventListener("mousedown", (e) =>
+            onResizeMouseDown(e, desk, h2)
+          );
         });
 
         desk.appendChild(handleTL);
@@ -345,15 +366,20 @@
         };
         desk.dataset.id = deskData.id;
         deskList.push(deskData);
+
+        // ★ 최초 생성 시에도 라벨의 반대 회전(-rotation) 적용
+        labelWrapper.style.transform = `translate(-50%, -50%) rotate(${-rotation}deg)`;
       }
 
       /***************************************************
-       *        deskList -> URL 해시로 변환
+       *  deskList -> URL 해시에 압축 저장 (LZ-String)
        ***************************************************/
       function updateURLWithDeskData() {
         const json = JSON.stringify(deskList);
-        const encoded = encodeURIComponent(json);
-        window.location.hash = "desks=" + encoded;
+        // LZ-String 압축
+        const compressed = LZString.compressToEncodedURIComponent(json);
+        // 해시에 "desks-lz=" 형태로 저장
+        window.location.hash = "desks-lz=" + compressed;
       }
 
       /***************************************************
@@ -420,6 +446,13 @@
         desk.dataset.rotation = String(newRot);
         desk.style.transform = `rotate(${newRot}deg)`;
 
+        // ★ 반대 각도로 labelWrapper를 회전하여 '정방향' 유지
+        const labelWrapper = desk.querySelector(".desk-label-wrapper");
+        if (labelWrapper) {
+          // -(newRot) = -90, -180, ...
+          labelWrapper.style.transform = `translate(-50%, -50%) rotate(${-newRot}deg)`;
+        }
+
         const data = deskList.find((d) => d.id == desk.dataset.id);
         if (data) {
           data.rotation = newRot;
@@ -455,6 +488,7 @@
 
         const angleDeg = parseFloat(currentResizeDesk.dataset.rotation) || 0;
 
+        // 전역 → 로컬
         const { x: dxLocal, y: dyLocal } = toLocalDelta(
           dxGlobal,
           dyGlobal,
@@ -494,9 +528,11 @@
           newHeight = startHeight + dyLocal;
         }
 
+        // 최소 크기
         newWidth = Math.max(30, newWidth);
         newHeight = Math.max(20, newHeight);
 
+        // 로컬 → 전역
         const { x: shiftGlobalX, y: shiftGlobalY } = toGlobalDelta(
           shiftLocalX,
           shiftLocalY,
@@ -539,23 +575,28 @@
       }
 
       /***************************************************
-       *     해시 내 desks=...를 찾아서 로딩/복원
+       *     해시 내 desks-lz=...를 찾아서 복원
        ***************************************************/
       function loadDesksFromURL() {
-        const hash = window.location.hash;
+        const hash = window.location.hash; // "#desks-lz=..."
         if (!hash) return;
 
-        const match = hash.match(/desks=(.+)/);
+        const match = hash.match(/desks-lz=(.+)/);
         if (!match) return;
 
-        const encoded = match[1];
-        try {
-          const jsonStr = decodeURIComponent(encoded);
-          const parsed = JSON.parse(jsonStr);
-          if (Array.isArray(parsed)) {
-            deskList.length = 0;
+        const compressed = match[1];
+        const decompressed =
+          LZString.decompressFromEncodedURIComponent(compressed);
+        if (!decompressed) {
+          console.error("압축 해제 실패 or 빈 데이터");
+          return;
+        }
 
-            // 기존 책상 제거
+        try {
+          const parsed = JSON.parse(decompressed);
+          if (Array.isArray(parsed)) {
+            // 기존 리스트/DOM 초기화
+            deskList.length = 0;
             office.querySelectorAll(".desk").forEach((deskEl) => {
               office.removeChild(deskEl);
             });
@@ -570,17 +611,22 @@
         }
       }
 
-      // DOM 로드 시 해시 복원
+      /***************************************************
+       *   초기 로드 시 해시 복원 or 기본 책상 생성
+       ***************************************************/
       window.addEventListener("DOMContentLoaded", () => {
         loadDesksFromURL();
 
-        // URL 해시에 desks 데이터가 없으면, 기본 책상 1개 생성
+        // 해시에 데이터가 없으면 기본 책상 1개
         if (!window.location.hash) {
           createDesk(100, 100);
           updateURLWithDeskData();
         }
       });
 
+      /***************************************************
+       *         Add Desk / Reset 버튼 핸들러
+       ***************************************************/
       // "Add Desk" 버튼
       addDeskBtn.addEventListener("click", () => {
         createDesk();
