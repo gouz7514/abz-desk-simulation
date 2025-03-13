@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ABZ 자리배치 시뮬레이션</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: sans-serif;
+        background: #333;
+        color: #eee;
+      }
+      .office {
+        position: relative;
+        width: 500px;
+        height: 700px;
+        margin: 20px auto;
+        background-color: #222;
+        border: 2px solid #444;
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .office::before {
+        content: "";
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        width: 480px;
+        height: 680px;
+        border: 2px dashed #555;
+        border-radius: 4px;
+        pointer-events: none;
+      }
+      /* 왼쪽 하단, 사용 불가 영역 */
+      .unusable-area {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        width: 140px;
+        height: 140px;
+        background-color: rgba(255, 0, 0, 0.4);
+        pointer-events: none;
+      }
+      .unusable-area2 {
+        position: absolute;
+        left: 0;
+        bottom: 140px;
+        width: 70px;
+        height: 70px;
+        background-color: rgba(255, 0, 0, 0.4);
+        pointer-events: none;
+      }
+      .door {
+        position: absolute;
+        right: 0;
+        top: 0;
+        width: 5px;
+        height: 120px;
+        background-color: blue;
+      }
+
+      .controls {
+        display: flex;
+        justify-content: center;
+        margin-top: 10px;
+      }
+      button {
+        margin: 0 5px;
+        padding: 8px 12px;
+        background: #555;
+        color: #fff;
+        border: none;
+        cursor: pointer;
+        border-radius: 4px;
+      }
+      button:hover {
+        background: #666;
+      }
+
+      /* 책상 컨테이너 */
+      .desk {
+        position: absolute;
+        width: 133px;
+        height: 59px;
+        background-color: #1e90ff;
+        border: 2px solid #0a74da;
+        border-radius: 4px;
+        box-sizing: border-box;
+        user-select: none; /* 텍스트 드래그 방지 */
+        transform-origin: 0 0; /* 회전 기준: 왼쪽 상단 */
+        cursor: move;
+      }
+
+      /* 중앙 이름 입력 필드 */
+      .desk-label {
+        position: absolute;
+        width: 80px;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        border: 1px solid #aaa;
+        font-size: 14px;
+        text-align: center;
+        border-radius: 4px;
+        outline: none;
+        padding: 2px;
+      }
+
+      /* 회전 / 삭제 버튼 */
+      .desk-btn {
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        background-color: #333;
+        color: #fff;
+        font-size: 14px;
+        text-align: center;
+        line-height: 20px;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      .desk-btn:hover {
+        background-color: #555;
+      }
+      .rotate-btn {
+        top: 2px;
+        left: 2px;
+      }
+      .delete-btn {
+        top: 2px;
+        right: 2px;
+      }
+
+      /* 네 모서리 리사이즈 핸들 */
+      .resize-handle {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        background-color: #fff;
+        border: 1px solid #888;
+        z-index: 2;
+        border-radius: 2px;
+      }
+      .top-left {
+        cursor: nwse-resize;
+        top: -5px;
+        left: -5px;
+      }
+      .top-right {
+        cursor: nesw-resize;
+        top: -5px;
+        right: -5px;
+      }
+      .bottom-left {
+        cursor: nesw-resize;
+        bottom: -5px;
+        left: -5px;
+      }
+      .bottom-right {
+        cursor: nwse-resize;
+        bottom: -5px;
+        right: -5px;
+      }
+    </style>
+  </head>
+  <body>
+    <h2 style="text-align: center">ABZ 자리배치 시뮬레이션</h2>
+
+    <div class="office" id="office">
+      <div class="unusable-area"></div>
+      <div class="unusable-area2"></div>
+      <div class="door"></div>
+    </div>
+
+    <div class="controls">
+      <button id="addDeskBtn">Add Desk</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+
+    <script>
+      /* 
+        책상 데이터 배열 
+        각 요소: {
+          id: number,
+          left: number,
+          top: number,
+          width: number,
+          height: number,
+          rotation: number,
+          label: string
+        }
+      */
+      const deskList = [];
+
+      const office = document.getElementById("office");
+      const addDeskBtn = document.getElementById("addDeskBtn");
+      const resetBtn = document.getElementById("resetBtn");
+
+      // 드래그 관련
+      let currentDragDesk = null;
+      let dragOffsetX = 0,
+        dragOffsetY = 0;
+      let zIndexCounter = 1;
+
+      // 리사이즈 관련
+      let currentResizeDesk = null;
+      let currentResizeHandle = null;
+      let startMouseX = 0,
+        startMouseY = 0;
+      let startWidth = 0,
+        startHeight = 0;
+      let startLeft = 0,
+        startTop = 0;
+
+      /**
+       * 전역 이동량(dx, dy)을 angleDeg만큼 "역회전"하여
+       * 로컬(회전 전) 좌표로 변환
+       */
+      function toLocalDelta(dx, dy, angleDeg) {
+        const rad = (-angleDeg * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        return {
+          x: dx * cos - dy * sin,
+          y: dx * sin + dy * cos,
+        };
+      }
+
+      /**
+       * 로컬(회전 전) 좌표(dxLocal, dyLocal)를 angleDeg만큼 "정방향 회전"
+       * 하여 전역 좌표로 변환
+       */
+      function toGlobalDelta(dxLocal, dyLocal, angleDeg) {
+        const rad = (angleDeg * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        return {
+          x: dxLocal * cos - dyLocal * sin,
+          y: dxLocal * sin + dyLocal * cos,
+        };
+      }
+
+      /***************************************************
+       *                  책상 생성
+       ***************************************************/
+      function createDesk(
+        x = 100,
+        y = 100,
+        w = 133,
+        h = 59,
+        rotation = 0,
+        labelValue = ""
+      ) {
+        // 1) DOM 생성
+        const desk = document.createElement("div");
+        desk.classList.add("desk");
+
+        // 초기 스타일
+        desk.style.left = x + "px";
+        desk.style.top = y + "px";
+        desk.style.width = w + "px";
+        desk.style.height = h + "px";
+        desk.dataset.rotation = String(rotation);
+        // 초기 회전 적용
+        desk.style.transform = `rotate(${rotation}deg)`;
+
+        // 중앙 Label
+        const labelInput = document.createElement("input");
+        labelInput.className = "desk-label";
+        labelInput.placeholder = "이름";
+        labelInput.value = labelValue;
+        // label 변경 시 deskList도 갱신
+        labelInput.addEventListener("input", () => {
+          const find = deskList.find((d) => d.id == desk.dataset.id);
+          if (find) {
+            find.label = labelInput.value;
+            updateURLWithDeskData();
+          }
+        });
+        desk.appendChild(labelInput);
+
+        // 회전 버튼
+        const rotateBtn = document.createElement("div");
+        rotateBtn.classList.add("desk-btn", "rotate-btn");
+        rotateBtn.textContent = "⟳";
+        rotateBtn.title = "Rotate";
+        rotateBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          rotateDesk(desk);
+        });
+        desk.appendChild(rotateBtn);
+
+        // 삭제 버튼
+        const deleteBtn = document.createElement("div");
+        deleteBtn.classList.add("desk-btn", "delete-btn");
+        deleteBtn.textContent = "X";
+        deleteBtn.title = "Delete";
+        deleteBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          // deskList에서도 제거
+          const index = deskList.findIndex((d) => d.id == desk.dataset.id);
+          if (index >= 0) {
+            deskList.splice(index, 1);
+          }
+          office.removeChild(desk);
+          updateURLWithDeskData();
+        });
+        desk.appendChild(deleteBtn);
+
+        // 리사이즈 핸들 4개
+        const handleTL = document.createElement("div");
+        handleTL.classList.add("resize-handle", "top-left");
+        const handleTR = document.createElement("div");
+        handleTR.classList.add("resize-handle", "top-right");
+        const handleBL = document.createElement("div");
+        handleBL.classList.add("resize-handle", "bottom-left");
+        const handleBR = document.createElement("div");
+        handleBR.classList.add("resize-handle", "bottom-right");
+
+        [handleTL, handleTR, handleBL, handleBR].forEach((h) => {
+          h.addEventListener("mousedown", (e) => onResizeMouseDown(e, desk, h));
+        });
+
+        desk.appendChild(handleTL);
+        desk.appendChild(handleTR);
+        desk.appendChild(handleBL);
+        desk.appendChild(handleBR);
+
+        // 드래그 이벤트
+        desk.addEventListener("mousedown", onDeskMouseDown);
+
+        // 2) 오피스에 추가
+        office.appendChild(desk);
+
+        // 3) 데이터 객체
+        const deskData = {
+          id: Date.now() + Math.random(),
+          left: x,
+          top: y,
+          width: w,
+          height: h,
+          rotation: rotation,
+          label: labelValue,
+        };
+        desk.dataset.id = deskData.id;
+        deskList.push(deskData);
+      }
+
+      /***************************************************
+       *        deskList -> URL 해시로 변환
+       ***************************************************/
+      function updateURLWithDeskData() {
+        const json = JSON.stringify(deskList);
+        const encoded = encodeURIComponent(json);
+        window.location.hash = "desks=" + encoded;
+      }
+
+      /***************************************************
+       *              책상 드래그 로직
+       ***************************************************/
+      function onDeskMouseDown(e) {
+        if (
+          e.target.classList.contains("resize-handle") ||
+          e.target.classList.contains("desk-label")
+        ) {
+          return;
+        }
+        currentDragDesk = e.currentTarget;
+        currentDragDesk.style.zIndex = ++zIndexCounter;
+
+        dragOffsetX = e.clientX - currentDragDesk.offsetLeft;
+        dragOffsetY = e.clientY - currentDragDesk.offsetTop;
+
+        document.addEventListener("mousemove", onDragMove);
+        document.addEventListener("mouseup", onDragEnd);
+      }
+
+      function onDragMove(e) {
+        if (!currentDragDesk) return;
+
+        const officeRect = office.getBoundingClientRect();
+        let newX = e.clientX - dragOffsetX;
+        let newY = e.clientY - dragOffsetY;
+
+        const maxX = officeRect.width - currentDragDesk.offsetWidth;
+        const maxY = officeRect.height - currentDragDesk.offsetHeight;
+
+        newX = Math.max(0, Math.min(newX, maxX));
+        newY = Math.max(0, Math.min(newY, maxY));
+
+        currentDragDesk.style.left = newX + "px";
+        currentDragDesk.style.top = newY + "px";
+      }
+
+      function onDragEnd(e) {
+        document.removeEventListener("mousemove", onDragMove);
+        document.removeEventListener("mouseup", onDragEnd);
+
+        if (currentDragDesk) {
+          const id = currentDragDesk.dataset.id;
+          const data = deskList.find((d) => d.id == id);
+          if (data) {
+            data.left = parseFloat(currentDragDesk.style.left);
+            data.top = parseFloat(currentDragDesk.style.top);
+          }
+        }
+        currentDragDesk = null;
+
+        updateURLWithDeskData();
+      }
+
+      /***************************************************
+       *              책상 회전 로직
+       ***************************************************/
+      function rotateDesk(desk) {
+        const currentRot = parseFloat(desk.dataset.rotation) || 0;
+        const newRot = (currentRot + 90) % 360;
+
+        desk.dataset.rotation = String(newRot);
+        desk.style.transform = `rotate(${newRot}deg)`;
+
+        const data = deskList.find((d) => d.id == desk.dataset.id);
+        if (data) {
+          data.rotation = newRot;
+        }
+        updateURLWithDeskData();
+      }
+
+      /***************************************************
+       *           네 모서리 리사이즈 로직
+       ***************************************************/
+      function onResizeMouseDown(e, desk, handle) {
+        e.stopPropagation();
+
+        currentResizeDesk = desk;
+        currentResizeHandle = handle;
+
+        startMouseX = e.clientX;
+        startMouseY = e.clientY;
+        startWidth = desk.offsetWidth;
+        startHeight = desk.offsetHeight;
+        startLeft = desk.offsetLeft;
+        startTop = desk.offsetTop;
+
+        document.addEventListener("mousemove", onMouseMoveResize);
+        document.addEventListener("mouseup", onMouseUpResize);
+      }
+
+      function onMouseMoveResize(e) {
+        if (!currentResizeDesk || !currentResizeHandle) return;
+
+        const dxGlobal = e.clientX - startMouseX;
+        const dyGlobal = e.clientY - startMouseY;
+
+        const angleDeg = parseFloat(currentResizeDesk.dataset.rotation) || 0;
+
+        const { x: dxLocal, y: dyLocal } = toLocalDelta(
+          dxGlobal,
+          dyGlobal,
+          angleDeg
+        );
+
+        const isTop =
+          currentResizeHandle.classList.contains("top-left") ||
+          currentResizeHandle.classList.contains("top-right");
+        const isLeft =
+          currentResizeHandle.classList.contains("top-left") ||
+          currentResizeHandle.classList.contains("bottom-left");
+        const isRight =
+          currentResizeHandle.classList.contains("top-right") ||
+          currentResizeHandle.classList.contains("bottom-right");
+        const isBottom =
+          currentResizeHandle.classList.contains("bottom-left") ||
+          currentResizeHandle.classList.contains("bottom-right");
+
+        let newWidth = startWidth;
+        let newHeight = startHeight;
+        let shiftLocalX = 0;
+        let shiftLocalY = 0;
+
+        if (isLeft) {
+          newWidth = startWidth - dxLocal;
+          shiftLocalX = dxLocal;
+        }
+        if (isRight) {
+          newWidth = startWidth + dxLocal;
+        }
+        if (isTop) {
+          newHeight = startHeight - dyLocal;
+          shiftLocalY = dyLocal;
+        }
+        if (isBottom) {
+          newHeight = startHeight + dyLocal;
+        }
+
+        newWidth = Math.max(30, newWidth);
+        newHeight = Math.max(20, newHeight);
+
+        const { x: shiftGlobalX, y: shiftGlobalY } = toGlobalDelta(
+          shiftLocalX,
+          shiftLocalY,
+          angleDeg
+        );
+        let newLeft = startLeft + shiftGlobalX;
+        let newTop = startTop + shiftGlobalY;
+
+        const officeRect = office.getBoundingClientRect();
+        const maxLeft = officeRect.width - newWidth;
+        const maxTop = officeRect.height - newHeight;
+
+        newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+        newTop = Math.max(0, Math.min(newTop, maxTop));
+
+        currentResizeDesk.style.width = newWidth + "px";
+        currentResizeDesk.style.height = newHeight + "px";
+        currentResizeDesk.style.left = newLeft + "px";
+        currentResizeDesk.style.top = newTop + "px";
+      }
+
+      function onMouseUpResize(e) {
+        document.removeEventListener("mousemove", onMouseMoveResize);
+        document.removeEventListener("mouseup", onMouseUpResize);
+
+        if (currentResizeDesk) {
+          const id = currentResizeDesk.dataset.id;
+          const data = deskList.find((d) => d.id == id);
+          if (data) {
+            data.width = parseFloat(currentResizeDesk.style.width);
+            data.height = parseFloat(currentResizeDesk.style.height);
+            data.left = parseFloat(currentResizeDesk.style.left);
+            data.top = parseFloat(currentResizeDesk.style.top);
+          }
+        }
+        currentResizeDesk = null;
+        currentResizeHandle = null;
+
+        updateURLWithDeskData();
+      }
+
+      /***************************************************
+       *     해시 내 desks=...를 찾아서 로딩/복원
+       ***************************************************/
+      function loadDesksFromURL() {
+        const hash = window.location.hash;
+        if (!hash) return;
+
+        const match = hash.match(/desks=(.+)/);
+        if (!match) return;
+
+        const encoded = match[1];
+        try {
+          const jsonStr = decodeURIComponent(encoded);
+          const parsed = JSON.parse(jsonStr);
+          if (Array.isArray(parsed)) {
+            deskList.length = 0;
+
+            // 기존 책상 제거
+            office.querySelectorAll(".desk").forEach((deskEl) => {
+              office.removeChild(deskEl);
+            });
+
+            // 복원
+            parsed.forEach((d) => {
+              createDesk(d.left, d.top, d.width, d.height, d.rotation, d.label);
+            });
+          }
+        } catch (err) {
+          console.error("URL로부터 desks 복원 중 에러", err);
+        }
+      }
+
+      // DOM 로드 시 해시 복원
+      window.addEventListener("DOMContentLoaded", () => {
+        loadDesksFromURL();
+
+        // URL 해시에 desks 데이터가 없으면, 기본 책상 1개 생성
+        if (!window.location.hash) {
+          createDesk(100, 100);
+          updateURLWithDeskData();
+        }
+      });
+
+      // "Add Desk" 버튼
+      addDeskBtn.addEventListener("click", () => {
+        createDesk();
+        updateURLWithDeskData();
+      });
+
+      // "Reset" 버튼 => 처음 상태(기본 책상 1개 + URL 해시 초기화)
+      resetBtn.addEventListener("click", () => {
+        // 1) DOM에서 모든 책상 제거
+        office.querySelectorAll(".desk").forEach((deskEl) => {
+          office.removeChild(deskEl);
+        });
+        // 2) deskList 배열 초기화
+        deskList.length = 0;
+        // 3) location.hash 초기화
+        window.location.hash = "";
+        // 4) 기본 책상 다시 생성
+        createDesk(100, 100);
+        // 5) URL 해시 갱신
+        updateURLWithDeskData();
+      });
+    </script>
+  </body>
+</html>
